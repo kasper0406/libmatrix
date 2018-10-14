@@ -215,13 +215,14 @@ extern "C" {
 
         handle->rows = rows;
         handle->columns = columns;
-        auto alloc_res = cudaMallocManaged(&handle->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&handle->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
 
-        for (size_t i = 0; i < N; i++) {
-            handle->elements[i] = elements[i];
+        auto cpy_res = cudaMemcpy(handle->elements, elements, N * sizeof(float), cudaMemcpyHostToDevice);
+        if (cpy_res != cudaSuccess) {
+            return 40;
         }
 
         return 0;
@@ -229,6 +230,15 @@ extern "C" {
 
     void matrix_free(MatrixHandle* handle) {
         cudaFree(handle->elements);
+    }
+
+    int matrix_device_to_host(const MatrixHandle* handle, float* host_elements) {
+        int N = handle->rows * handle->columns;
+        auto cpy_res = cudaMemcpy(host_elements, handle->elements, N * sizeof(float), cudaMemcpyDeviceToHost);
+        if (cpy_res != cudaSuccess) {
+            return 40;
+        }
+        return 0;
     }
 
     int matrix_add(const MatrixHandle* A, const MatrixHandle* B, MatrixHandle* result_handle) {
@@ -240,7 +250,7 @@ extern "C" {
 
         result_handle->rows = A->rows;
         result_handle->columns = A->columns;
-        auto alloc_res = cudaMallocManaged(&result_handle->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result_handle->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -278,7 +288,7 @@ extern "C" {
 
         result_handle->rows = A->rows;
         result_handle->columns = A->columns;
-        auto alloc_res = cudaMallocManaged(&result_handle->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result_handle->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -301,7 +311,7 @@ extern "C" {
 
         result_handle->rows = A->rows;
         result_handle->columns = A->columns;
-        auto alloc_res = cudaMallocManaged(&result_handle->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result_handle->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -319,7 +329,7 @@ extern "C" {
         const auto N = A->rows * A->columns;
         result_handle->rows = A->rows;
         result_handle->columns = A->columns;
-        auto alloc_res = cudaMallocManaged(&result_handle->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result_handle->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -342,7 +352,7 @@ extern "C" {
 
         result_handle->rows = A->rows;
         result_handle->columns = B->columns;
-        auto alloc_res = cudaMallocManaged(&result_handle->elements, N_result * sizeof(float));
+        auto alloc_res = cudaMalloc(&result_handle->elements, N_result * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -365,7 +375,7 @@ extern "C" {
 
         result->rows = A->columns;
         result->columns = A->rows;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -385,7 +395,7 @@ extern "C" {
         result->rows = A->rows + 1;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -403,7 +413,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -431,7 +441,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -451,7 +461,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -468,7 +478,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -485,7 +495,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -502,7 +512,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -519,7 +529,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -536,7 +546,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
@@ -553,7 +563,7 @@ extern "C" {
         result->rows = A->rows;
         result->columns = A->columns;
         const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMallocManaged(&result->elements, N * sizeof(float));
+        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
         if (alloc_res != cudaSuccess) {
             return 10;
         }
