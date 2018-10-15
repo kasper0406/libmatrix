@@ -14,6 +14,15 @@ using namespace std;
 #define DEBUG_SYNCHRONIZE()
 #endif
 
+__global__ void set_values(float value, int N, float* A) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int i = index; i < N; i += stride) {
+        A[i] = value;
+    }
+}
+
 __global__ void add(int N, float* A, float* B, float* R) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
@@ -82,6 +91,22 @@ __global__ void transpose(int rows, int columns, float* input, float* R) {
 
     if (row < rows && col < columns) {
         R[col * rows + row] = input[row * columns + col];
+    }
+}
+
+// Does an inplace transpose. N should be half of the actual number of floats in the matrix!
+// rows and columns are specified as the size of the matrix prior to transpose!
+__global__ void inplace_transpose(int N, int rows, int columns, float* A) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int i = index; i < N; i += stride) {
+        int row = i / columns;
+        int column = i % columns;
+
+        float tmp = A[row * columns + column];
+        A[row * columns + column] = A[column * rows + row];
+        A[column * rows + row] = tmp;
     }
 }
 
@@ -200,8 +225,11 @@ extern "C" {
         size_t rows;
         size_t columns;
         float* elements;
-    };
 
+        size_t allocated_bytes;
+        float* base_ptr;
+    };
+    
     void matrix_synchronize(bool only_current_thread) {
         if (only_current_thread) {
             cudaStreamSynchronize(cudaStreamPerThread);
@@ -210,17 +238,52 @@ extern "C" {
         }
     }
 
-    int matrix_alloc(size_t rows, size_t columns, float* elements, struct MatrixHandle* handle) {
-        const size_t N = rows * columns;
-
+    int matrix_alloc_or_reuse(MatrixHandle* handle, size_t rows, size_t columns) {
         handle->rows = rows;
         handle->columns = columns;
-        auto alloc_res = cudaMalloc(&handle->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        const auto N = rows * columns;
+
+        if (handle->allocated_bytes == 0 || handle->elements == NULL || handle->base_ptr == NULL) {
+            // Allocate some memory
+
+            // HACK: Allocate one more row to allow fast row-extension without extra alloc
+            size_t bytes_to_alloc = (N + columns) * sizeof(float);
+
+            auto alloc_res = cudaMalloc(&handle->base_ptr, bytes_to_alloc);
+            if (alloc_res != cudaSuccess) {
+                return 10;
+            }
+            handle->allocated_bytes = bytes_to_alloc;
+            handle->elements = handle->base_ptr + columns;
+
+            return 0;
+        }
+        
+        if (handle->allocated_bytes < N * sizeof(float)) {
+            cerr << "Allocated bytes: " << handle->allocated_bytes << endl;
+            cerr << "Requested N: " << N << "\tBytes: " << N * sizeof(float) << endl;
+            cerr << "Requested size (rows, columns) = " << rows << ", " << columns << endl;
+
+            // Not enough already alloccated space to continue :/
+            return 60;
         }
 
-        auto cpy_res = cudaMemcpy(handle->elements, elements, N * sizeof(float), cudaMemcpyHostToDevice);
+        // Due to the above hack, we may need to reset the elements ptr to base_ptr in this case
+        size_t spare_capacity = (handle->elements - handle->base_ptr) * sizeof(float);
+        if (handle->allocated_bytes - spare_capacity < N * sizeof(float)) {
+            handle->elements = handle->base_ptr;
+        }
+
+        return 0;
+    }
+
+    int matrix_alloc(size_t rows, size_t columns, float* elements, struct MatrixHandle* handle) {
+        auto alloc_res = matrix_alloc_or_reuse(handle, rows, columns);
+        if (alloc_res != 0) {
+            return alloc_res;
+        }
+
+        auto cpy_res = cudaMemcpy(handle->elements, elements, rows * columns * sizeof(float), cudaMemcpyHostToDevice);
         if (cpy_res != cudaSuccess) {
             return 40;
         }
@@ -229,7 +292,7 @@ extern "C" {
     }
 
     void matrix_free(MatrixHandle* handle) {
-        cudaFree(handle->elements);
+        cudaFree(handle->base_ptr);
     }
 
     int matrix_device_to_host(const MatrixHandle* handle, float* host_elements) {
@@ -246,15 +309,12 @@ extern "C" {
             return 20;
         }
 
-        const auto N = A->rows * A->columns;
-
-        result_handle->rows = A->rows;
-        result_handle->columns = A->columns;
-        auto alloc_res = cudaMalloc(&result_handle->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result_handle, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        const auto N = A->rows * A->columns;
         int blockSize = 128;
         int numBlocks = (N + blockSize - 1) / blockSize;
         add<<<numBlocks, blockSize>>>(N, A->elements, B->elements, result_handle->elements);
@@ -284,15 +344,12 @@ extern "C" {
             return 20;
         }
 
-        const auto N = A->rows * A->columns;
-
-        result_handle->rows = A->rows;
-        result_handle->columns = A->columns;
-        auto alloc_res = cudaMalloc(&result_handle->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result_handle, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        const auto N = A->rows * A->columns;
         int blockSize = 128;
         int numBlocks = (N + blockSize - 1) / blockSize;
         sub<<<numBlocks, blockSize>>>(N, A->elements, B->elements, result_handle->elements);
@@ -307,15 +364,12 @@ extern "C" {
             return 20;
         }
 
-        const auto N = A->rows * A->columns;
-
-        result_handle->rows = A->rows;
-        result_handle->columns = A->columns;
-        auto alloc_res = cudaMalloc(&result_handle->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result_handle, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        const auto N = A->rows * A->columns;
         int blockSize = 128;
         int numBlocks = (N + blockSize - 1) / blockSize;
         entrywise_multiply<<<numBlocks, blockSize>>>(N, A->elements, B->elements, result_handle->elements);
@@ -326,14 +380,12 @@ extern "C" {
     }
 
     int matrix_scalar_multiply(const MatrixHandle* A, float scalar, MatrixHandle* result_handle) {
-        const auto N = A->rows * A->columns;
-        result_handle->rows = A->rows;
-        result_handle->columns = A->columns;
-        auto alloc_res = cudaMalloc(&result_handle->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result_handle, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        int N = A->rows * A->columns;
         int blockSize = 128;
         int numBlocks = (N + blockSize - 1) / blockSize;
         scalar_multiply<<<numBlocks, blockSize>>>(N, scalar, A->elements, result_handle->elements);
@@ -347,16 +399,13 @@ extern "C" {
         if (A->columns != B->rows) {
             return 30;
         }
-
-        const auto N_result = A->rows * B->columns;
-
-        result_handle->rows = A->rows;
-        result_handle->columns = B->columns;
-        auto alloc_res = cudaMalloc(&result_handle->elements, N_result * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        
+        auto alloc_res = matrix_alloc_or_reuse(result_handle, A->rows, B->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        const auto N_result = A->rows * B->columns;
         const int block_size = 16;
         dim3 threads_per_block(block_size, block_size);
         dim3 num_blocks((A->rows + block_size - 1) / block_size,
@@ -371,13 +420,9 @@ extern "C" {
     }
 
     int matrix_transpose(const MatrixHandle* A, MatrixHandle* result) {
-        const auto N = A->rows * A->columns;
-
-        result->rows = A->columns;
-        result->columns = A->rows;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->columns, A->rows);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
         const int block_size = 16;
@@ -391,15 +436,57 @@ extern "C" {
         return 0;
     }
 
-    int matrix_add_constant_row(float padding, const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows + 1;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+    int matrix_inplace_transpose(MatrixHandle* handle) {
+        int N = handle->rows * handle->columns / 2;
+        int blockSize = 128;
+        int numBlocks = (N + blockSize - 1) / blockSize;
+        inplace_transpose<<<numBlocks, blockSize>>>(N, handle->rows, handle->columns, handle->elements);
+
+        size_t rows = handle->rows;
+        handle->rows = handle->columns;
+        handle->columns = rows;
+
+        return 0;
+    }
+
+    int matrix_inplace_add_constant_row(float value, MatrixHandle* handle) {
+        if (handle->elements - handle->base_ptr < handle->columns) {
+            // Not enough memory to play the row extension trick
+            return 100;
         }
 
+        // Magically allocate one more row
+        handle->elements -= handle->columns;
+        handle->rows += 1;
+
+        int N = handle->rows * handle->columns;
+        int blockSize = 128;
+        int numBlocks = (N + blockSize - 1) / blockSize;
+        set_values<<<numBlocks, blockSize>>>(value, handle->columns, handle->elements);
+
+        DEBUG_SYNCHRONIZE();
+
+        return 0;
+    }
+
+    int matrix_inplace_remove_first_row(MatrixHandle* handle) {
+        if (handle->rows == 0) {
+            return 110;
+        }
+
+        handle->rows -= 1;
+        handle->elements += handle->columns;
+
+        return 0;
+    }
+
+    int matrix_add_constant_row(float padding, const MatrixHandle* A, MatrixHandle* result) {
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows + 1, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
+        }
+
+        int N = result->rows * result->columns;
         int blockSize = 128;
         int numBlocks = (N + blockSize - 1) / blockSize;
         add_constant_row<<<numBlocks, blockSize>>>(padding, N, A->columns, A->elements, result->elements);
@@ -410,14 +497,12 @@ extern "C" {
     }
 
     int matrix_dropout_elements(float rate, const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        const auto N = result->rows * result->columns;
         curandState* random_state;
         alloc_res = cudaMalloc(&random_state, N * sizeof(curandState));
         if (alloc_res != cudaSuccess) {
@@ -438,12 +523,9 @@ extern "C" {
     }
 
     int matrix_dropout_rows(float rate, const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
         srand(time(NULL));
@@ -456,18 +538,16 @@ extern "C" {
 
         return 0;
     }
-    
-    int matrix_copy(const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+
+    int matrix_copy(const MatrixHandle* src, MatrixHandle* dst) {
+        auto alloc_res = matrix_alloc_or_reuse(dst, src->rows, src->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        int N = src->rows * src->columns;
         int num_blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        copy<<<num_blocks, BLOCK_SIZE>>>(N, A->elements, result->elements);
+        copy<<<num_blocks, BLOCK_SIZE>>>(N, src->elements, dst->elements);
 
         DEBUG_SYNCHRONIZE();
 
@@ -475,14 +555,12 @@ extern "C" {
     }
 
     int matrix_apply_sigmoid(const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        int N = result->rows * result->columns;
         int num_blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         apply_sigmoid<<<num_blocks, BLOCK_SIZE>>>(N, A->elements, result->elements);
 
@@ -492,14 +570,12 @@ extern "C" {
     }
 
     int matrix_apply_sigmoid_derivative(const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        int N = result->rows * result->columns;
         int num_blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         apply_sigmoid_derivative<<<num_blocks, BLOCK_SIZE>>>(N, A->elements, result->elements);
 
@@ -509,14 +585,12 @@ extern "C" {
     }
 
     int matrix_apply_relu(const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        int N = result->rows * result->columns;
         int num_blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         apply_relu<<<num_blocks, BLOCK_SIZE>>>(N, A->elements, result->elements);
 
@@ -526,14 +600,12 @@ extern "C" {
     }
 
     int matrix_apply_relu_derivative(const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        int N = result->rows * result->columns;
         int num_blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         apply_relu_derivative<<<num_blocks, BLOCK_SIZE>>>(N, A->elements, result->elements);
 
@@ -543,14 +615,12 @@ extern "C" {
     }
 
     int matrix_apply_twoplayerscore(const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        int N = result->rows * result->columns;
         int num_blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         apply_twoplayerscore<<<num_blocks, BLOCK_SIZE>>>(N, A->elements, result->elements);
 
@@ -560,14 +630,12 @@ extern "C" {
     }
 
     int matrix_apply_twoplayerscore_derivative(const MatrixHandle* A, MatrixHandle* result) {
-        result->rows = A->rows;
-        result->columns = A->columns;
-        const auto N = result->rows * result->columns;
-        auto alloc_res = cudaMalloc(&result->elements, N * sizeof(float));
-        if (alloc_res != cudaSuccess) {
-            return 10;
+        auto alloc_res = matrix_alloc_or_reuse(result, A->rows, A->columns);
+        if (alloc_res != 0) {
+            return alloc_res;
         }
 
+        int N = result->rows * result->columns;
         int num_blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         apply_twoplayerscore_derivative<<<num_blocks, BLOCK_SIZE>>>(N, A->elements, result->elements);
 
