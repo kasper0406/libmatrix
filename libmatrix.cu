@@ -51,12 +51,30 @@ __global__ void sub(int N, float* A, float* B, float* R) {
     }
 }
 
+__global__ void sub_assign(int N, float* A, float* B) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int i = index; i < N; i += stride) {
+        A[i] -= B[i];
+    }
+}
+
 __global__ void entrywise_multiply(int N, float* A, float* B, float* R) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
     for (int i = index; i < N; i += stride) {
         R[i] = A[i] * B[i];
+    }
+}
+
+__global__ void inplace_entrywise_multiply(int N, float* A, float* B) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int i = index; i < N; i += stride) {
+        A[i] *= B[i];
     }
 }
 
@@ -360,6 +378,21 @@ extern "C" {
         return 0;
     }
 
+    int matrix_sub_assign(MatrixHandle* A, const MatrixHandle* B) {
+        if (A->rows != B->rows || A->columns != B->columns) {
+            return 20;
+        }
+
+        const auto N = A->rows * A->columns;
+        int blockSize = BLOCK_SIZE;
+        int numBlocks = (N + blockSize - 1) / blockSize;
+        sub_assign<<<numBlocks, blockSize>>>(N, A->elements, B->elements);
+
+        DEBUG_SYNCHRONIZE();
+
+        return 0;
+    }
+
     int matrix_entrywise_multiply(const MatrixHandle* A, const MatrixHandle* B, MatrixHandle* result_handle) {
         if (A->rows != B->rows || A->columns != B->columns) {
             return 20;
@@ -374,6 +407,21 @@ extern "C" {
         int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         entrywise_multiply<<<numBlocks, blockSize>>>(N, A->elements, B->elements, result_handle->elements);
+
+        DEBUG_SYNCHRONIZE();
+
+        return 0;
+    }
+
+    int matrix_inplace_entrywise_multiply(MatrixHandle* A, const MatrixHandle* B) {
+        if (A->rows != B->rows || A->columns != B->columns) {
+            return 20;
+        }
+
+        const auto N = A->rows * A->columns;
+        int blockSize = BLOCK_SIZE;
+        int numBlocks = (N + blockSize - 1) / blockSize;
+        inplace_entrywise_multiply<<<numBlocks, blockSize>>>(N, A->elements, B->elements);
 
         DEBUG_SYNCHRONIZE();
 
