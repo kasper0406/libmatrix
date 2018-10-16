@@ -6,7 +6,8 @@
 
 using namespace std;
 
-#define BLOCK_SIZE 128
+#define BLOCK_SIZE 256
+#define GRID_BLOCK_SIZE 32
 
 #ifdef DEBUG
 #define DEBUG_SYNCHRONIZE() cudaDeviceSynchronize()
@@ -315,7 +316,7 @@ extern "C" {
         }
 
         const auto N = A->rows * A->columns;
-        int blockSize = 128;
+        int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         add<<<numBlocks, blockSize>>>(N, A->elements, B->elements, result_handle->elements);
 
@@ -330,7 +331,7 @@ extern "C" {
         }
 
         const auto N = A->rows * A->columns;
-        int blockSize = 128;
+        int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         add_assign<<<numBlocks, blockSize>>>(N, A->elements, B->elements);
 
@@ -350,7 +351,7 @@ extern "C" {
         }
 
         const auto N = A->rows * A->columns;
-        int blockSize = 128;
+        int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         sub<<<numBlocks, blockSize>>>(N, A->elements, B->elements, result_handle->elements);
 
@@ -370,7 +371,7 @@ extern "C" {
         }
 
         const auto N = A->rows * A->columns;
-        int blockSize = 128;
+        int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         entrywise_multiply<<<numBlocks, blockSize>>>(N, A->elements, B->elements, result_handle->elements);
 
@@ -386,7 +387,7 @@ extern "C" {
         }
 
         int N = A->rows * A->columns;
-        int blockSize = 128;
+        int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         scalar_multiply<<<numBlocks, blockSize>>>(N, scalar, A->elements, result_handle->elements);
 
@@ -406,7 +407,7 @@ extern "C" {
         }
 
         const auto N_result = A->rows * B->columns;
-        const int block_size = 16;
+        const int block_size = GRID_BLOCK_SIZE;
         dim3 threads_per_block(block_size, block_size);
         dim3 num_blocks((A->rows + block_size - 1) / block_size,
                         (B->columns + block_size - 1) / block_size);
@@ -425,7 +426,7 @@ extern "C" {
             return alloc_res;
         }
 
-        const int block_size = 16;
+        const int block_size = GRID_BLOCK_SIZE;
         dim3 threads_per_block(block_size, block_size);
         dim3 num_blocks((A->rows + block_size - 1) / block_size,
                         (A->columns + block_size - 1) / block_size);
@@ -438,7 +439,7 @@ extern "C" {
 
     int matrix_inplace_transpose(MatrixHandle* handle) {
         int N = handle->rows * handle->columns / 2;
-        int blockSize = 128;
+        int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         inplace_transpose<<<numBlocks, blockSize>>>(N, handle->rows, handle->columns, handle->elements);
 
@@ -460,7 +461,7 @@ extern "C" {
         handle->rows += 1;
 
         int N = handle->rows * handle->columns;
-        int blockSize = 128;
+        int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         set_values<<<numBlocks, blockSize>>>(value, handle->columns, handle->elements);
 
@@ -487,7 +488,7 @@ extern "C" {
         }
 
         int N = result->rows * result->columns;
-        int blockSize = 128;
+        int blockSize = BLOCK_SIZE;
         int numBlocks = (N + blockSize - 1) / blockSize;
         add_constant_row<<<numBlocks, blockSize>>>(padding, N, A->columns, A->elements, result->elements);
 
