@@ -186,7 +186,8 @@ __global__ void apply_sigmoid(int N, float* A, float* R) {
 
     for (int i = index; i < N; i += stride) {
         float exponential = expf(A[i]);
-        R[i] = exponential / (exponential + 1);
+        float res = exponential / (exponential + 1);
+        R[i] = isfinite(res) ? res : 1;
     }
 }
 
@@ -196,7 +197,8 @@ __global__ void apply_sigmoid_derivative(int N, float* A, float* R) {
 
     for (int i = index; i < N; i += stride) {
         float exponential = expf(A[i]);
-        R[i] = exponential / (1 + exponential * (exponential + 2));
+        float res = exponential / (1 + exponential * (exponential + 2));
+        R[i] = isfinite(res) ? res : 0;
     }
 }
 
@@ -224,7 +226,8 @@ __global__ void apply_twoplayerscore(int N, float* A, float* R) {
 
     for (int i = index; i < N; i += stride) {
         float exponential = expf(A[i]);
-        R[i] = (exponential - 1) / (exponential + 1);
+        float res = (exponential - 1) / (exponential + 1);
+        R[i] = isfinite(res) ? res : 1;
     }
 }
 
@@ -234,7 +237,8 @@ __global__ void apply_twoplayerscore_derivative(int N, float* A, float* R) {
 
     for (int i = index; i < N; i += stride) {
         float exponential = expf(A[i]);
-        R[i] = (2 * exponential) / (1 + exponential * (exponential + 2));
+        float res = (2 * exponential) / (1 + exponential * (exponential + 2));
+        R[i] = isfinite(res) ? res : 0;
     }
 }
 
