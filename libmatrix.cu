@@ -6,7 +6,7 @@
 
 using namespace std;
 
-#define BLOCK_SIZE 256
+#define BLOCK_SIZE 1024
 #define GRID_BLOCK_SIZE 32
 
 #ifdef DEBUG
@@ -95,7 +95,7 @@ __global__ void multiply(int A_rows, int A_cols, float* A,
     int col = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (row < A_rows && col < B_cols) {
-        int scalar = 0;
+        float scalar = 0;
         for (int k = 0; k < A_cols; k++) {
             scalar += A[row * A_cols + k] * B[k * B_cols + col];
         }
@@ -185,7 +185,7 @@ __global__ void apply_sigmoid(int N, float* A, float* R) {
     int stride = blockDim.x * gridDim.x;
 
     for (int i = index; i < N; i += stride) {
-        float exponential = exp(A[i]);
+        float exponential = expf(A[i]);
         R[i] = exponential / (exponential + 1);
     }
 }
@@ -195,7 +195,7 @@ __global__ void apply_sigmoid_derivative(int N, float* A, float* R) {
     int stride = blockDim.x * gridDim.x;
 
     for (int i = index; i < N; i += stride) {
-        float exponential = exp(A[i]);
+        float exponential = expf(A[i]);
         R[i] = exponential / (1 + exponential * (exponential + 2));
     }
 }
@@ -223,7 +223,7 @@ __global__ void apply_twoplayerscore(int N, float* A, float* R) {
     int stride = blockDim.x * gridDim.x;
 
     for (int i = index; i < N; i += stride) {
-        float exponential = exp(A[i]);
+        float exponential = expf(A[i]);
         R[i] = (exponential - 1) / (exponential + 1);
     }
 }
@@ -233,7 +233,7 @@ __global__ void apply_twoplayerscore_derivative(int N, float* A, float* R) {
     int stride = blockDim.x * gridDim.x;
 
     for (int i = index; i < N; i += stride) {
-        float exponential = exp(A[i]);
+        float exponential = expf(A[i]);
         R[i] = (2 * exponential) / (1 + exponential * (exponential + 2));
     }
 }
